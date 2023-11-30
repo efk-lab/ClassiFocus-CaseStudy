@@ -1,0 +1,317 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  creationTimestamp: null
+  name: classifocus-k8s
+spec: {}
+status: {}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-redis
+  namespace: classifocus-k8s
+spec:
+  capacity:
+    storage: 50Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Recycle
+  hostPath:
+   path: /data/redis
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-redis
+  namespace: classifocus-k8s
+spec:
+  storageClassName: ""
+  resources:
+    requests:
+       storage: 50Gi
+  volumeMode: Filesystem
+  volumeName: pv-redis
+  accessModes:
+    - ReadWriteOnce
+---
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: classifocus-k8s
+  labels:
+    app: deployment-redis
+  name: service-redis
+spec:
+  ports:
+  - port: 6379
+    targetPort: 6379
+    protocol: TCP
+    nodePort: 32666
+  selector:
+    app: deployment-redis
+  type: NodePort
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: classifocus-k8s
+  labels:
+    app: deployment-redis
+  name: deployment-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: deployment-redis
+  template:
+    metadata:
+      labels:
+        app: deployment-redis
+    spec:
+      containers:
+      - image: redis/redis-stack:latest
+        name: redis
+        command: ["redis-server"]
+        args: ["--replica-announce-ip svc-redis-instance-1", "--requirepass root", 
+        "--loadmodule /opt/redis-stack/lib/redisearch.so" , "--loadmodule /opt/redis-stack/lib/rejson.so",
+        "--loadmodule /opt/redis-stack/lib/redistimeseries.so","--loadmodule /opt/redis-stack/lib/redisbloom.so",
+        "--save 10 1", "--appendonly yes", "--dir ./data"]
+        volumeMounts:
+        - name: "pvc-redis"
+          mountPath: "/data"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "500m"
+          limits:
+            memory: "512Mi"
+            cpu: "1000m"           
+      volumes:
+      - name: "pvc-redis"
+        persistentVolumeClaim:
+          claimName: "pvc-redis"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: secret-classifocus
+  namespace: classifocus-k8s
+type: Opaque
+stringData:
+  redis-password: root
+  security-jwt-clientsecret: secret
+  security-jwt-signingkey: "123"
+  admin-user-password: "123"
+  system-user-password: "123"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: configmap-classifocus
+  namespace: classifocus-k8s
+data:
+  redis-host: service-redis.classifocus-k8s
+  redis-port: "6379"
+  redis-database: "0"
+  redis-timeout: "60000"
+  redis-pool-max-active: "8"
+  redis-pool-max-idle: "8"
+  redis-pool-min-idle: "0"
+  security-jwt-clientid: ClassiFocusClient
+  security-jwt-accesstokenvaliditityseconds: "43200"
+  security-jwt-authorizedgranttypes: password,authorization_code,refresh_token,client_credentials
+  security-jwt-refreshtokenvalidityseconds: "2592000"
+  processlog-time-limit-millis: "1"
+  admin-user-email: "admin@classifocus.com"
+  system-user-email: "system@classifocus.com"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-classifocus
+  namespace: classifocus-k8s
+  labels:
+     app: classifocus
+spec:
+  selector:
+    app: classifocus
+  type: LoadBalancer
+  ports:
+    - protocol: TCP
+      port: 8081
+      targetPort: 8081
+      nodePort: 32588
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-classifocus
+  namespace: classifocus-k8s
+  labels:
+    app: classifocus
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: classifocus
+  template:
+    metadata:
+      labels:
+        app: classifocus
+    spec:
+      containers:
+      - name: classifocus
+        image: eftmk/classifocus:latest
+        imagePullPolicy: Never
+        ports:
+          - containerPort: 8081
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+          requests:
+            memory: "256Mi"
+            cpu: "500m"
+        volumeMounts:
+          - mountPath: /mnt/k8s/log
+            name: pv-classifocus
+        env:
+          - name: CONFIG_REDIS_HOST
+            valueFrom:
+              configMapKeyRef:
+                name: configmap-classifocus
+                key: redis-host
+          - name: CONFIG_REDIS_PORT
+            valueFrom:
+              configMapKeyRef:
+                name: configmap-classifocus
+                key: redis-port
+          - name: CONFIG_REDIS_DATABASE
+            valueFrom:
+              configMapKeyRef:
+                name: configmap-classifocus
+                key: redis-database
+          - name: CONFIG_REDIS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: secret-classifocus
+                key: redis-password
+          - name: CONFIG_REDIS_TIMEOUT
+            valueFrom:
+              configMapKeyRef:
+                name: configmap-classifocus
+                key: redis-timeout
+          - name: CONFIG_REDIS_POOL_MAX_ACTIVE
+            valueFrom:
+              configMapKeyRef:
+                name: configmap-classifocus
+                key: redis-pool-max-active
+          - name: CONFIG_REDIS_POOL_MAX_IDLE
+            valueFrom:
+              configMapKeyRef:
+                name: configmap-classifocus
+                key: redis-pool-max-idle
+          - name: CONFIG_REDIS_POOL_MIN_IDLE
+            valueFrom:
+              configMapKeyRef:
+                name: configmap-classifocus
+                key: redis-pool-min-idle
+          - name: CONFIG_SECURITY_JWT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: secret-classifocus
+                key: security-jwt-clientsecret
+          - name: CONFIG_SECURITY_JWT_SIGNINGKEY
+            valueFrom:
+              secretKeyRef:
+                name: secret-classifocus
+                key: security-jwt-signingkey
+          - name: CONFIG_SECURITY_JWT_CLIENTID
+            valueFrom:
+              configMapKeyRef:
+                name: configmap-classifocus
+                key: security-jwt-clientid
+          - name: CONFIG_SECURITY_JWT_ACCESSTOKEN_VALIDITYSECONDS
+            valueFrom:
+              configMapKeyRef:
+                name: configmap-classifocus
+                key: security-jwt-accesstokenvaliditityseconds
+          - name: CONFIG_SECURITY_JWT_AUTHORIZED_GRANTTYPES
+            valueFrom:
+              configMapKeyRef:
+                name: configmap-classifocus
+                key: security-jwt-authorizedgranttypes
+          - name: CONFIG_SECURITY_JWT_REFERSHTOKEN_VALIDITYSECONDS
+            valueFrom:
+              configMapKeyRef:
+                name: configmap-classifocus
+                key: security-jwt-refreshtokenvalidityseconds
+          - name: CONFIG_PROCESSLOG_TIME_LIMIT_MILLIS
+            valueFrom:
+              configMapKeyRef:
+                name: configmap-classifocus
+                key: processlog-time-limit-millis
+          - name: CONFIG_ADMIN_USER_EMAIL
+            valueFrom:
+              configMapKeyRef:
+                name: configmap-classifocus
+                key: admin-user-email
+          - name: CONFIG_ADMIN_USER_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: secret-classifocus
+                key: admin-user-password
+          - name: CONFIG_SYSTEM_USER_EMAIL
+            valueFrom:
+              configMapKeyRef:
+                name: configmap-classifocus
+                key: system-user-email
+          - name: CONFIG_SYSTEM_USER_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: secret-classifocus
+                key: system-user-password
+      volumes:
+        - name: pv-classifocus
+          persistentVolumeClaim:
+            claimName: pvc-classifocus
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-classifocus
+  namespace: classifocus-k8s
+  labels:
+    app: classifocus
+spec:
+  capacity:
+    storage: 20Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Recycle
+  storageClassName: standard
+  hostPath:
+    path: /mnt/k8s/log
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-classifocus
+  namespace: classifocus-k8s
+spec:
+  resources:
+    requests:
+      storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  selector:
+    matchLabels: 
+      app: classifocus
