@@ -35,3 +35,28 @@ Kubernetes
 - StatisticsController : Restfull Service for statistics operations.
   - getClassifiedStatsByStatus
   - getClassifiedStatsByCategory
+ 
+# Deployment
+
+- Install minikube
+  - https://minikube.sigs.k8s.io/docs/start/
+
+- For loadbanacer run command below
+  > minikube tunnel
+   
+- Build Image
+  > docker build -t classifocus:latest -f /eclipse-workspace/ClassiFocus/src/main/resources/Dockerfile .
+  
+  > eval $(minikube docker-env)
+  
+- Deploy Applications
+  > kubectl apply -f classifocus.yaml
+  
+- Kubernetes Dashboard
+  > minikube dasboard
+  
+- Prometheus&Grafana
+  > kubectl create namespace monitoring
+  
+  > helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+  
