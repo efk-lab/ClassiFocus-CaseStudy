@@ -167,7 +167,7 @@ spec:
     spec:
       containers:
       - name: classifocus
-        image: eftmk/classifocus:latest
+        image: classifocus:latest
         imagePullPolicy: Never
         ports:
           - containerPort: 8081
